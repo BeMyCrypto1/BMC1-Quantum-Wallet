@@ -1,9 +1,7 @@
 /*****************************************************************************************
  * BMC1 QUANTUM-RESISTANT WALLET
  * Hybrid Post-Quantum + ECDSA Wallet for Polygon Mainnet
- * 
- * This design follows NIST, NSA CNSA 2.0, and ETSI PQC migration guidance.
- * No false claims. No broken crypto. No simulations.
+ * Folder-standardized, audit-safe, production-aligned
  *****************************************************************************************/
 
 'use strict';
@@ -19,34 +17,49 @@ const argon2 = require('argon2');
 const oqs = require('liboqs-node');
 
 /* ============================================================
-   GLOBAL CONSTANTS
+   ROOT PATHS (STANDARDIZED)
 ============================================================ */
 
-const STORAGE_ROOT = path.join(__dirname, 'BMC1-Quantum-Storage');
-const POLYGON_RPC = 'https://polygon-rpc.com'; // mainnet only
+const ROOT = path.join(__dirname, '..');
+const STORAGE = path.join(ROOT, 'storage');
+
+const DIRS = {
+    masterKeys: path.join(STORAGE, 'master-keys'),
+    wallets: path.join(STORAGE, 'wallets'),
+    migrations: path.join(STORAGE, 'migrations'),
+    audit: path.join(STORAGE, 'audit'),
+    metadata: path.join(STORAGE, 'metadata')
+};
+
+const WALLET_INDEX = path.join(DIRS.metadata, 'wallet-index.json');
+const POLYGON_RPC = 'https://polygon-rpc.com';
 
 /* ============================================================
-   UTILITIES
+   BOOTSTRAP STORAGE
 ============================================================ */
 
-function ensureDir(p) {
-    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+function ensureDir(dir) {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function secureWrite(file, data) {
-    fs.writeFileSync(file, data, { mode: 0o600 });
+Object.values(DIRS).forEach(ensureDir);
+
+if (!fs.existsSync(WALLET_INDEX)) {
+    fs.writeFileSync(WALLET_INDEX, JSON.stringify({ wallets: [] }, null, 2));
 }
+
+/* ============================================================
+   AUDIT LOGGING (APPEND-ONLY)
+============================================================ */
 
 function logEvent(message, level = 'INFO') {
-    const logDir = path.join(STORAGE_ROOT, 'audit');
-    ensureDir(logDir);
-    const line = `[${new Date().toISOString()}] [${level}] ${message}\n`;
-    fs.appendFileSync(path.join(logDir, 'security-audit.log'), line);
-    console.log(line.trim());
+    const entry = `[${new Date().toISOString()}] [${level}] ${message}\n`;
+    fs.appendFileSync(path.join(DIRS.audit, 'security-audit.log'), entry);
+    console.log(entry.trim());
 }
 
 /* ============================================================
-   PASSWORD INPUT (SAFE)
+   SECURE PASSWORD INPUT
 ============================================================ */
 
 function readPassword(prompt) {
@@ -64,7 +77,7 @@ function readPassword(prompt) {
                 process.stdout.write('\n');
                 resolve(pwd);
             } else if (char === '\u0003') {
-                process.exit();
+                process.exit(1);
             } else {
                 pwd += char;
                 process.stdout.write('*');
@@ -74,17 +87,10 @@ function readPassword(prompt) {
 }
 
 /* ============================================================
-   CRYPTO CORE
+   WALLET CORE
 ============================================================ */
 
 class BMC1QuantumWallet {
-
-    constructor() {
-        ensureDir(STORAGE_ROOT);
-        ensureDir(path.join(STORAGE_ROOT, 'master-keys'));
-        ensureDir(path.join(STORAGE_ROOT, 'wallets'));
-        ensureDir(path.join(STORAGE_ROOT, 'migrations'));
-    }
 
     /* ========================================================
        MASTER KEY (REAL POST-QUANTUM)
@@ -100,44 +106,49 @@ class BMC1QuantumWallet {
             throw new Error('Password policy violation');
         }
 
-        // REAL Dilithium5 keypair
         const dilithium = new oqs.Signature('Dilithium5');
-        const keypair = dilithium.generateKeypair();
+        const { publicKey, privateKey } = dilithium.generateKeypair();
 
-        // Encrypt private key using Argon2id + XChaCha20
         const salt = crypto.randomBytes(32);
         const key = await argon2.hash(pwd1, {
             salt,
             type: argon2.argon2id,
             raw: true,
             timeCost: 4,
-            memoryCost: 1024 * 64,
+            memoryCost: 65536,
             parallelism: 2
         });
 
-        const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
-        const ciphertext = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
-            keypair.privateKey,
+        const nonce = sodium.randombytes_buf(
+            sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
+        );
+
+        const encrypted = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+            privateKey,
             null,
             null,
             nonce,
             key.slice(0, 32)
         );
 
-        const master = {
+        const record = {
             algorithm: 'CRYSTALS-Dilithium5',
-            publicKey: Buffer.from(keypair.publicKey).toString('hex'),
-            encryptedPrivateKey: Buffer.from(ciphertext).toString('hex'),
+            publicKey: Buffer.from(publicKey).toString('hex'),
+            encryptedPrivateKey: Buffer.from(encrypted).toString('hex'),
             nonce: Buffer.from(nonce).toString('hex'),
             salt: salt.toString('hex'),
-            created: new Date().toISOString()
+            createdAt: new Date().toISOString()
         };
 
-        const id = `qr_master_${Date.now()}.json.enc`;
-        secureWrite(path.join(STORAGE_ROOT, 'master-keys', id), JSON.stringify(master, null, 2));
+        const filename = `qr_master_${Date.now()}.json.enc`;
+        fs.writeFileSync(
+            path.join(DIRS.masterKeys, filename),
+            JSON.stringify(record, null, 2),
+            { mode: 0o600 }
+        );
 
-        logEvent(`Quantum master key created: ${id}`, 'HIGH');
-        return id;
+        logEvent(`Quantum master key created: ${filename}`, 'HIGH');
+        return filename;
     }
 
     /* ========================================================
@@ -148,9 +159,9 @@ class BMC1QuantumWallet {
         await sodium.ready;
 
         const pwd = await readPassword('Enter master password: ');
-        const master = JSON.parse(fs.readFileSync(
-            path.join(STORAGE_ROOT, 'master-keys', masterFile)
-        ));
+        const master = JSON.parse(
+            fs.readFileSync(path.join(DIRS.masterKeys, masterFile))
+        );
 
         const key = await argon2.hash(pwd, {
             salt: Buffer.from(master.salt, 'hex'),
@@ -158,7 +169,7 @@ class BMC1QuantumWallet {
             raw: true
         });
 
-        const privatePQ = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+        const pqPrivate = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
             null,
             Buffer.from(master.encryptedPrivateKey, 'hex'),
             null,
@@ -166,49 +177,62 @@ class BMC1QuantumWallet {
             key.slice(0, 32)
         );
 
-        // Hybrid derivation
         const seed = crypto.createHash('sha3-512')
-            .update(privatePQ)
-            .update('BMC1-POLYGON')
+            .update(pqPrivate)
+            .update('BMC1-POLYGON-HYBRID')
             .digest();
 
-        const wallet = ethers.Wallet.fromSeed(seed);
-        const provider = new ethers.JsonRpcProvider(POLYGON_RPC);
-        const connected = wallet.connect(provider);
+        const wallet = ethers.Wallet.fromSeed(seed)
+            .connect(new ethers.JsonRpcProvider(POLYGON_RPC));
 
-        const encryptedJson = await connected.encrypt(pwd);
+        const encryptedJson = await wallet.encrypt(pwd);
 
-        const file = `wallet_${connected.address}.json.enc`;
-        secureWrite(path.join(STORAGE_ROOT, 'wallets', file), encryptedJson);
+        const walletFile = `wallet_${wallet.address}.json.enc`;
+        fs.writeFileSync(
+            path.join(DIRS.wallets, walletFile),
+            encryptedJson,
+            { mode: 0o600 }
+        );
 
-        logEvent(`Polygon wallet derived: ${connected.address}`, 'MEDIUM');
-        return connected.address;
+        const index = JSON.parse(fs.readFileSync(WALLET_INDEX));
+        index.wallets.push({
+            address: wallet.address,
+            file: walletFile,
+            masterKey: masterFile,
+            createdAt: new Date().toISOString(),
+            network: 'Polygon Mainnet'
+        });
+        fs.writeFileSync(WALLET_INDEX, JSON.stringify(index, null, 2));
+
+        logEvent(`Polygon wallet derived: ${wallet.address}`, 'MEDIUM');
+        return wallet.address;
     }
 
     /* ========================================================
-       BALANCE
+       CHECK BALANCE
     ======================================================== */
 
     async checkBalance(address) {
         const provider = new ethers.JsonRpcProvider(POLYGON_RPC);
-        const bal = await provider.getBalance(address);
-        console.log(`Balance: ${ethers.formatEther(bal)} MATIC`);
+        const balance = await provider.getBalance(address);
+        console.log(`Balance for ${address}: ${ethers.formatEther(balance)} MATIC`);
     }
 }
 
 /* ============================================================
-   MAIN
+   MAIN EXECUTION
 ============================================================ */
 
 (async () => {
     console.log('BMC1 QUANTUM-RESISTANT WALLET');
     console.log('Hybrid Post-Quantum + ECDSA (Polygon Mainnet)');
-    console.log('------------------------------------------------');
+    console.log('================================================');
 
     const wallet = new BMC1QuantumWallet();
 
-    const master = await wallet.generateMasterKey();
-    const address = await wallet.derivePolygonWallet(master);
+    const masterKeyFile = await wallet.generateMasterKey();
+    const address = await wallet.derivePolygonWallet(masterKeyFile);
     await wallet.checkBalance(address);
 
+    logEvent('Wallet setup complete', 'INFO');
 })();
