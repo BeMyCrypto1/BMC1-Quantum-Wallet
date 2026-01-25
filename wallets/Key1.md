@@ -1,4 +1,6 @@
+# Fully offline, no blockchain interaction yet
 
+  Password-protected encryption using AES-256-GCM + scrypt KDF
 
 # ✅ Master key successfully created and saved!
    Key ID: 
