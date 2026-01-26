@@ -43,7 +43,8 @@ much more secure and QC-ready than your original snippet.
     Feature	                                Original Code	            New Skeleton Code
     Quantum-resistant signatures	        SPHINCS (used)	            SPHINCS (used) ✅
     AES encryption	                        Direct password → AES	    Password → PBKDF2 → AES     
-                                                                       (harder, QC-resistant)                                     Deterministic wallet derivation	        SHA-256	                    SHA3-512 + master key + index ✅
+                                                                       (harder, QC-resistant) 
+    Deterministic wallet derivation	        SHA-256	                    SHA3-512 + master key + index ✅
     Metadata handling	                    Minimal	                    Full JSON tracking ✅
     Security against brute-force            Weak	                    PBKDF2 600,000 iterations + salt ✅
     / QC attacks	
