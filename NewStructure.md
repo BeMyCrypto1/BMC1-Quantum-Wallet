@@ -10,8 +10,11 @@
     │  └─ wallet/
     │     ├─ master.js
     │     ├─ derive.js
+    │     ├─ crypto.js
     │     └─ metadata.js
     │  └─ index.js
     └─ storage/
        ├─ master-keys/
        └─ wallets/
+    └─ metadata.json
+    
