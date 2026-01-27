@@ -53,4 +53,17 @@ You can see the wallets in the following folders below:
 
 Once this runs successfully, your first QC-safe wallet is READY!!!.
 
+# NOTE:
+
+  ## Need to follow all steps properly as shown
+
+ENSURE TO WRITE DOWN THE PASSWORD 
+you have chosen to run the wallet creation project...
+
+If you loose it... you lose access to any wallets created
+the phrases/keys are lost forever since they are all encripted
+and can't be descripted if password is lost
+
+REMEMBER  the password 
+
 
